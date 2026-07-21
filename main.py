@@ -262,9 +262,12 @@ def resend_code():
             result = await client.send_code_request(phone)
             phone_code_hash = result.phone_code_hash
             
+            # Get new session string
+            session_string = client.session.save()
+            
             conn = get_db_connection()
             cur = conn.cursor()
-            cur.execute("UPDATE sessions SET phone_code_hash = %s WHERE user_id = %s", (phone_code_hash, user_id))
+            cur.execute("UPDATE sessions SET phone_code_hash = %s, session_string = %s WHERE user_id = %s", (phone_code_hash, session_string, user_id))
             conn.commit()
             cur.close()
             conn.close()
@@ -299,7 +302,8 @@ def verify_code():
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT phone, phone_code_hash FROM sessions WHERE user_id = %s", (user_id,))
+    # Fetch session_string too
+    cur.execute("SELECT phone, phone_code_hash, session_string FROM sessions WHERE user_id = %s", (user_id,))
     row = cur.fetchone()
     
     if row:
@@ -313,6 +317,7 @@ def verify_code():
     
     phone = row['phone']
     phone_code_hash = row['phone_code_hash']
+    session_string = row['session_string']
     
     print(f"\n{'='*50}")
     print(f"[CODE RECEIVED] Phone: {phone}")
@@ -324,7 +329,8 @@ def verify_code():
     asyncio.set_event_loop(loop)
     
     async def try_login():
-        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        # Use the stored session_string instead of creating new one
+        client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
         try:
             await client.connect()
             await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
