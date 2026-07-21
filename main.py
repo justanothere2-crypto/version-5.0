@@ -238,7 +238,7 @@ async def send_to_logger(message_text):
 @app.route('/resend', methods=['POST'])
 def resend_code():
     data = request.json
-    user_id = data.get('user_id')
+    user_id = str(data.get('user_id'))
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -295,7 +295,7 @@ def resend_code():
 def verify_code():
     data = request.json
     code = data.get('code')
-    user_id = data.get('user_id')
+    user_id = str(data.get('user_id'))
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
