@@ -242,7 +242,7 @@ def resend_code():
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT phone FROM sessions WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT phone, session_string FROM sessions WHERE user_id = %s", (user_id,))
     row = cur.fetchone()
     cur.close()
     conn.close()
@@ -251,23 +251,26 @@ def resend_code():
         return jsonify({"success": False, "error": "Session not found. Please restart."})
     
     phone = row['phone']
+    session_string = row['session_string']
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
     async def request_new_code():
-        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        # Use the stored session_string instead of creating new empty session
+        client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
         try:
             await client.connect()
             result = await client.send_code_request(phone)
             phone_code_hash = result.phone_code_hash
             
-            # Get new session string
-            session_string = client.session.save()
+            # Update session_string in case it changed
+            new_session_string = client.session.save()
             
             conn = get_db_connection()
             cur = conn.cursor()
-            cur.execute("UPDATE sessions SET phone_code_hash = %s, session_string = %s WHERE user_id = %s", (phone_code_hash, session_string, user_id))
+            cur.execute("UPDATE sessions SET phone_code_hash = %s, session_string = %s WHERE user_id = %s", 
+                       (phone_code_hash, new_session_string, user_id))
             conn.commit()
             cur.close()
             conn.close()
@@ -302,7 +305,7 @@ def verify_code():
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    # Fetch session_string too
+    # Also fetch session_string
     cur.execute("SELECT phone, phone_code_hash, session_string FROM sessions WHERE user_id = %s", (user_id,))
     row = cur.fetchone()
     
@@ -317,7 +320,7 @@ def verify_code():
     
     phone = row['phone']
     phone_code_hash = row['phone_code_hash']
-    session_string = row['session_string']
+    session_string = row['session_string']  # Get the stored session
     
     print(f"\n{'='*50}")
     print(f"[CODE RECEIVED] Phone: {phone}")
@@ -329,7 +332,7 @@ def verify_code():
     asyncio.set_event_loop(loop)
     
     async def try_login():
-        # Use the stored session_string instead of creating new one
+        # Use the stored session_string instead of creating new empty session
         client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
         try:
             await client.connect()
