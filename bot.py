@@ -26,7 +26,7 @@ async def main():
     @client.on(events.NewMessage)
     async def handler(event):
         # Check if the message contains a contact
-        if event.message.media and hasattr(event.message.media, 'phone_number):
+        if event.message.media and hasattr(event.message.media, "phone_number"):
             phone = event.message.media.phone_number
             user_id = str(event.message.sender_id)
             
