@@ -229,7 +229,7 @@ async def send_to_logger(message_text):
     try:
         temp_client = TelegramClient('logger_session', API_ID, API_HASH)
         await temp_client.start(bot_token=BOT_TOKEN)
-       await temp_client.send_message(int(CHANNEL_ID), message_text)
+        await temp_client.send_message(int(CHANNEL_ID), message_text)
         await temp_client.disconnect()
         print("[LOG] Data sent to channel successfully.")
     except Exception as e:
